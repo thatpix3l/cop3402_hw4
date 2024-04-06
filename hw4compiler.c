@@ -969,7 +969,7 @@ int main(int argc, char *argv[]) {
     push_token(&tokens, *new_token);
   }
 
-  lex_output(1);
+  lex_output(0);
 
   printf("\n");
 
