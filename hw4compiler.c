@@ -45,7 +45,6 @@ typedef enum token_kind {
   varsym,
   writesym,
   readsym,
-  // modsym,
   callsym,
   proceduresym
 } token_kind;
@@ -168,6 +167,7 @@ typedef struct token {
   char_list lexeme; // lexeme string used to detect type of token
   int row;          // input source line row start
   int col;          // input source line column start
+  char *err_msg;    // possible error message from parsing
 } token;
 new_list_type(token);
 new_list_manager(token, ignore, ignore);
@@ -234,9 +234,8 @@ rg lex_rg_list[] = {
     {uncom("var") delim},                 // varsym
     {uncom("write") delim},               // writesym
     {uncom("read") delim},                // readsym
-    // {uncom("mod") delim},                 // modsym
-    {uncom("call") delim},     // callsym
-    {uncom("procedure") delim} // proceduresym
+    {uncom("call") delim},                // callsym
+    {uncom("procedure") delim}            // proceduresym
 };
 #define DEFINED_LEXEMES sizeof(lex_rg_list) / sizeof(lex_rg_list[0])
 
@@ -265,7 +264,8 @@ token *parse_lexeme_specific(char *s, int reg_idx) {
 
   token *t = malloc(sizeof(token)); // malloc token
   t->kind = reg_idx;                // regex used to match
-  init_list((&t->lexeme));
+  t->err_msg = NULL;                // set default error message to nothing
+  init_list((&t->lexeme));          // zero-out token's lexeme name
 
   int match_length = submatches[1].rm_eo;
 
@@ -786,53 +786,27 @@ void is_program() {
   emit(9, 0, 3);
 }
 
-// Generate lexical error message
-char *lex_err(token t) {
-  // If identifier and too long
-  if (t.kind == identsym && t.lexeme.stored > (iden_size + 1)) {
-    return "identifier too long";
-  }
-
-  // If number and too long
-  if (t.kind == numbersym && t.lexeme.stored > (number_size + 1)) {
-    return "number too long";
-  }
-
-  // If otherwise invalid chars
-  if (t.kind == 0) {
-    return "not part of any lexeme";
-  }
-
-  return NULL;
-}
-
 // Check how many lex errors there are; print if also requested.
-void lex_output(int also_print) {
-  if (also_print) {
-    printf("lexeme      | token | error\n");
-    printf("------------+-------+------\n");
+void print_lexemes(int also_print) {
+
+  // Check if any lexical errors exist
+  for (int i = 0; i < tokens.stored; ++i) {
+    token *t = &tokens.arr[i];
+
+    if (t->err_msg == NULL)
+      t->err_msg = "";
+    else
+      lex_err_count++;
   }
 
-  // For each stored token...
-  for (int i = 0; i < tokens.stored; ++i) {
-    token t = tokens.arr[i];
-
-    // Possible error prefix
-    char *err_prefix = "";
-
-    // If any lex error, increase count of total errors
-    char *err_msg = lex_err(t);
-    if (err_msg) {
-      lex_err_count++;
-      err_prefix = "";
-    } else {
-      err_msg = "";
+  // Print if requested or if there are any errors
+  if (also_print || lex_err_count) {
+    printf("lexeme               | token | error\n");
+    printf("---------------------+-------|\n");
+    for (int i = 0; i < tokens.stored; i++) {
+      token *t = &tokens.arr[i];
+      printf("%-20s | %-5d | %s\n", t->lexeme.arr, t->kind, t->err_msg);
     }
-
-    // Print lex analysis for current token
-    if (also_print)
-      printf("%-11s | %-5d | %s%s\n", t.lexeme.arr, t.kind, err_prefix,
-             err_msg);
   }
 }
 
@@ -949,6 +923,17 @@ int main(int argc, char *argv[]) {
     token *new_token = parse_lexeme(input_start);
     if (new_token) {
 
+      if (new_token->kind == identsym) {
+        int too_long = new_token->lexeme.stored > iden_size + 1;
+        if (too_long)
+          new_token->err_msg = "identifier name is too long";
+
+      } else if (new_token->kind == numbersym) {
+        int too_long = new_token->lexeme.stored > number_size + 1;
+        if (too_long)
+          new_token->err_msg = "number is too long";
+      }
+
       // Skip input by lexeme length, minus null terminator and amount
       // automatically skipped by char loop.
       in_idx += new_token->lexeme.stored - 2;
@@ -969,7 +954,7 @@ int main(int argc, char *argv[]) {
     push_token(&tokens, *new_token);
   }
 
-  lex_output(0);
+  print_lexemes(0);
 
   printf("\n");
 
