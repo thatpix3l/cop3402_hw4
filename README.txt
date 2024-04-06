@@ -2,7 +2,9 @@ Authors:
 Jonathan Alonso
 Kerem Aydin
 
+To compile:
+cd "/path/to/repo"
+gcc -o hw4compiler *.c
+
 To run:
-change directory to repo
-run gcc *.c
-run ./a.out "/path/to/whatever/pl0/file"
+hw4compiler "/path/to/whatever/pl0/source/code"
