@@ -11,6 +11,7 @@
 const int iden_size = 11;  // max characters for identifier
 const int number_size = 5; // max characters for number
 const int ar_min = 3;      // min activation record size
+const int assembly_size = 3;
 
 // Lexical analysis token kind
 typedef enum token_kind {
@@ -44,18 +45,21 @@ typedef enum token_kind {
   varsym,
   writesym,
   readsym,
-  modsym,
+  // modsym,
   callsym,
   proceduresym
 } token_kind;
 
 char *op_codes[] = {"",    "LIT", "OPR", "LOD", "STO",
                     "CAL", "INC", "JMP", "JPC", "SYS"};
+const int op_codes_size = sizeof(op_codes) / sizeof(op_codes[0]);
 
 char *sys_subcodes[] = {"", "OUT", "INP", "EOP"};
+const int sys_subcodes_size = sizeof(sys_subcodes) / sizeof(sys_subcodes[0]);
 
 char *opr_subcodes[] = {"RTN", "ADD", "SUB", "MUL", "DIV", "EQL",
                         "NEQ", "LSS", "LEQ", "GTR", "GEQ", "ODD"};
+const int opr_subcodes_size = sizeof(opr_subcodes) / sizeof(opr_subcodes[0]);
 
 // Syntax analysis symbol kind.
 typedef enum symbol_kind { constant = 1, variable, procedure } symbol_kind;
@@ -138,20 +142,20 @@ void ignore(void *v) {}
 
 // Create a list for string management, that also accounts for null characters.
 new_list_type(char);
+
+// Ensure top of char list is not NULL terminator
 void char_pre_push(char_list *l) {
 
-  // If no item in list, ignore.
+  // If no item in list or top item is not null, return.
   char *c = peek_char(l);
-  if (!c)
+  if (!c || *c != '\0')
     return;
 
-  // If top item in list is not null, return
-  if (*c != '\0')
-    return;
-
-  // Since top is nul terminator, decrement stored so next push overwrites NULL
+  // Decrement stored count so current push overwrites null
   l->stored--;
 }
+
+// Terminate end of char list
 void char_post_push(char_list *l) {
   l->arr[l->stored] = '\0';
   l->stored++;
@@ -160,20 +164,34 @@ new_list_manager(char, char_pre_push, char_post_push);
 
 // Token generated from PL/0 source code.
 typedef struct token {
-  token_kind tk;    // token type
+  token_kind kind;  // token kind
   char_list lexeme; // lexeme string used to detect type of token
   int row;          // input source line row start
   int col;          // input source line column start
-  int l;            // symbol lexicographical level
-  int m;            // symbol m
-  int val;          // const/var value
-  int op;           // op code
-  symbol_kind sk;   // symbol kind
 } token;
-
-// Create a new basic list for token management.
 new_list_type(token);
 new_list_manager(token, ignore, ignore);
+
+// Assembly emitted from pl/0 source code.
+typedef struct assembly {
+  char *pretty;
+  int op;
+  int l;
+  int m;
+} assembly;
+new_list_type(assembly);
+new_list_manager(assembly, ignore, ignore);
+
+// Symbol reference
+typedef struct symbol {
+  symbol_kind kind; // symbol kind
+  char_list name;   // name used to reference symbol
+  int level;        // lex level
+  int m;            // how far off from activation record this is located
+  int const_val;    // constant literal from code
+} symbol;
+new_list_type(symbol);
+new_list_manager(symbol, ignore, ignore);
 
 #define delim "([^a-zA-Z])"                   // don't match letters
 #define uncom(reg) .uncompiled = "(^" reg ")" // match begin of line
@@ -186,44 +204,52 @@ typedef struct rg {
 
 // Lexemes
 rg lex_rg_list[] = {
-    {uncom("odd") delim},                       // oddsym
-    {uncom("[a-zA-Z]([a-zA-Z]|[0-9])*") delim}, // identsym
-    {uncom("[0-9]([0-9])*")},                   // numbersym
-    {uncom("\\+")},                             // plussym
-    {uncom("\\-")},                             // minussym
-    {uncom("\\*")},                             // multsym
-    {uncom("\\/")},                             // slashsym
-    {uncom("fi") delim},                        // fisym
-    {uncom("=")},                               // eqsym
-    {uncom("\\<>")},                            // neqsym
-    {uncom("<")},                               // lessym
-    {uncom("<=")},                              // leqsym
-    {uncom(">")},                               // gtrsym
-    {uncom(">=")},                              // geqsym
-    {uncom("\\(")},                             // lparentsym
-    {uncom("\\)")},                             // rparentsym
-    {uncom(",")},                               // commasym
-    {uncom(";")},                               // semicolonsym
-    {uncom("\\.")},                             // periodsym
-    {uncom(":=")},                              // becomessym
-    {uncom("begin") delim},                     // beginsym
-    {uncom("end") delim},                       // endsym
-    {uncom("if") delim},                        // ifsym
-    {uncom("then") delim},                      // thensym
-    {uncom("while") delim},                     // whilesym
-    {uncom("do") delim},                        // dosym
-    {uncom("const") delim},                     // constsym
-    {uncom("var") delim},                       // varsym
-    {uncom("write") delim},                     // writesym
-    {uncom("read") delim},                      // readsym
-    {uncom("mod") delim},                       // modsym
-    {uncom("call") delim},                      // callsym
-    {uncom("procedure") delim}                  // proceduresym
+    {uncom("odd") delim},                 // oddsym
+    {uncom("[a-zA-Z]([a-zA-Z]|[0-9])*")}, // identsym
+    {uncom("[0-9]([0-9])*")},             // numbersym
+    {uncom("\\+")},                       // plussym
+    {uncom("\\-")},                       // minussym
+    {uncom("\\*")},                       // multsym
+    {uncom("\\/")},                       // slashsym
+    {uncom("fi") delim},                  // fisym
+    {uncom("=")},                         // eqsym
+    {uncom("\\<>")},                      // neqsym
+    {uncom("<")},                         // lessym
+    {uncom("<=")},                        // leqsym
+    {uncom(">")},                         // gtrsym
+    {uncom(">=")},                        // geqsym
+    {uncom("\\(")},                       // lparentsym
+    {uncom("\\)")},                       // rparentsym
+    {uncom(",")},                         // commasym
+    {uncom(";")},                         // semicolonsym
+    {uncom("\\.")},                       // periodsym
+    {uncom(":=")},                        // becomessym
+    {uncom("begin") delim},               // beginsym
+    {uncom("end") delim},                 // endsym
+    {uncom("if") delim},                  // ifsym
+    {uncom("then") delim},                // thensym
+    {uncom("while") delim},               // whilesym
+    {uncom("do") delim},                  // dosym
+    {uncom("const") delim},               // constsym
+    {uncom("var") delim},                 // varsym
+    {uncom("write") delim},               // writesym
+    {uncom("read") delim},                // readsym
+    // {uncom("mod") delim},                 // modsym
+    {uncom("call") delim},     // callsym
+    {uncom("procedure") delim} // proceduresym
 };
 #define DEFINED_LEXEMES sizeof(lex_rg_list) / sizeof(lex_rg_list[0])
 
 // Regex to match a string starting with a comment.
 rg comment_rg = {uncom("/\\*(.|\r|\n|\t|\v)*\\*/")};
+
+char_list input; // in-memory copy of PL/0 input
+
+token_list tokens;  // lexical tokens
+int lex_err_count;  // lexical error count
+int lex_level = -1; // lexical level
+
+symbol_list symbols;
 
 // Parse lexeme using specific regex.
 token *parse_lexeme_specific(char *s, int reg_idx) {
@@ -238,42 +264,19 @@ token *parse_lexeme_specific(char *s, int reg_idx) {
   // Only here if regex matches
 
   token *t = malloc(sizeof(token)); // malloc token
-  t->tk = reg_idx;                  // regex used to match
+  t->kind = reg_idx;                // regex used to match
   init_list((&t->lexeme));
 
   int match_length = submatches[1].rm_eo;
 
-  // printf("match length: %d\n", match_length);
-
-  // Set allocation stored size
-  // t->lexeme.alloc = submatches[1].rm_eo + 1;
-  // t->lexeme.stored = t->lexeme.alloc;
-
-  // Allocate memory for lexeme name
-  // t->lexeme.arr = calloc(t->lexeme.alloc, submatches[1].rm_eo);
-
-  // Store lexeme name
-  // printf("length: %d\n", submatches[1].rm_eo);
+  // Store copy of name of regex
   for (int i = 0; i < match_length; i++) {
     char c = s[i];
     push_char(&t->lexeme, c);
-    // printf("after push: %s\n", t->lexeme.arr);
-    // t->lexeme.arr[i] = s[i];
   }
-
-  // printf("string length: %d\n", t->lexeme.stored - 1);
-
-  // Terminate
-  // t->lexeme.arr[submatches[1].rm_eo] = '\0';
 
   return t;
 }
-
-char_list input;     // in-memory copy of PL/0 input
-int tokens_idx = -1; // lexical token index
-token_list tokens;   // lexical tokens
-int lex_err_count;   // lexical error count
-int lex_level = 0;   // lexical level
 
 // Parse lexeme using all regexes, starting with non-identifier regex.
 token *parse_lexeme(char *s) {
@@ -297,43 +300,44 @@ token *parse_lexeme(char *s) {
   return parse_lexeme_specific(s, identsym);
 }
 
-int code_line = 0;
-token_list asm_list;
+int code_idx = -1;
+assembly_list asm_list;
 
-void fix_jpc(int idx) { asm_list.arr[idx].m = code_line + 1; }
+void fix_jpc_jmp(int idx) {
+  asm_list.arr[idx].m = (code_idx + 1) * assembly_size;
+}
 
-int emit(int op_code, int l, int m) {
-  code_line++;
-  char *pretty_name;
-
-  for (int i = 1; i < sizeof(sys_subcodes) / sizeof(sys_subcodes[0]); i++) {
-    if (op_code == i) {
-      pretty_name = sys_subcodes[i];
-      break;
-    }
+// In an array of strings, find and return matching index's string.
+char *find_string(int matching_idx, char **string_array, int array_size,
+                  int array_start) {
+  for (int i = array_start; i < array_size; i++) {
+    if (matching_idx == i)
+      return string_array[i];
   }
+  return NULL;
+}
 
-  for (int i = 0; i < sizeof(opr_subcodes) / sizeof(opr_subcodes[0]); i++) {
-    if (op_code == i) {
-      pretty_name = opr_subcodes[i];
-      break;
-    }
-  }
+int emit(int op_code, int level, int m) {
+  code_idx++;
 
-  for (int i = 0; i < sizeof(op_codes) / sizeof(op_codes[0]); i++) {
-    if (op_code == i) {
-      pretty_name = op_codes[i];
-      break;
-    }
-  }
+  assembly a;
+  a.op = op_code;
+  a.l = level;
+  a.m = m;
 
-  token t;
-  t.op = op_code;
-  t.l = l;
-  t.m = m;
-  t.lexeme.arr = pretty_name;
+  // If SYS, find pretty subcode name.
+  if (a.op == 9)
+    a.pretty = find_string(a.m, sys_subcodes, sys_subcodes_size, 1);
 
-  push_token(&asm_list, t);
+  // Else if OPR, find pretty subcode name.
+  else if (a.op == 2)
+    a.pretty = find_string(a.m, opr_subcodes, opr_subcodes_size, 0);
+
+  // Else, fall back to whatever name for regular op code.
+  else
+    a.pretty = find_string(a.op, op_codes, op_codes_size, 0);
+
+  push_assembly(&asm_list, a);
   return asm_list.stored - 1;
 }
 
@@ -347,29 +351,21 @@ int is_comment(char *s) {
   return comment_submatch[0].rm_eo;
 }
 
-token *latest_token;
-token_list const_var_procedure; // list of either const or var tokens
-
-void print_consts_vars() {
-  for (int i = 0; i < const_var_procedure.stored; i++) {
-    printf("%s\n", const_var_procedure.arr[i].lexeme.arr);
-  }
-}
+token *latest_token; // latest valid token retrieved before error
+int tokens_idx = -1; // lexical token index
 
 // Print message and panic.
 void err(char *s) {
 
-  // print_consts_vars();
-
   token *t = latest_token;
   if (!t) {
-    printf("error: %s\n", s);
+    printf("line: 1, column: 1, error: %s\n", s);
     return;
   }
 
   printf("line: %d, column: %d, lexeme: %s, regex: %s, error: %s\n", t->row + 1,
          t->col + t->lexeme.stored, t->lexeme.arr,
-         lex_rg_list[t->tk].uncompiled, s);
+         lex_rg_list[t->kind].uncompiled, s);
   exit(2);
 }
 
@@ -385,7 +381,7 @@ token *next_token(token_kind token_sym, char *msg) {
   }
 
   // If cannot get more tokens or does not match...
-  if (!t || t->tk != token_sym) {
+  if (!t || t->kind != token_sym) {
 
     // ...and also required, error
     if (msg) {
@@ -403,14 +399,14 @@ token *next_token(token_kind token_sym, char *msg) {
 
 void is_expression();
 
-token *find_symbol(char *s) {
+symbol *find_symbol(char *str) {
 
-  for (int i = const_var_procedure.stored - 1; i >= 0; i--) {
+  for (int i = symbols.stored - 1; i >= 0; i--) {
 
-    token *stored_token = &const_var_procedure.arr[i];
+    symbol *s = &symbols.arr[i];
 
-    if (strcmp(s, stored_token->lexeme.arr) == 0)
-      return stored_token;
+    if (strcmp(str, s->name.arr) == 0)
+      return s;
   }
 
   return NULL;
@@ -421,20 +417,16 @@ void is_factor() {
   t = next_token(identsym, NULL);
   if (t) {
 
-    token *s = find_symbol(t->lexeme.arr);
+    symbol *s = find_symbol(t->lexeme.arr);
 
-    if (!s) {
-      err("identifier is not defined");
-    }
+    if (!s || s->kind == procedure) {
+      err("factor: expected constant or variable");
 
-    if (s->sk == procedure) {
-      err("expected constant or variable, got procedure instead");
-
-    } else if (s->sk == constant) {
-      emit(1, 0, s->val);
+    } else if (s->kind == constant) {
+      emit(1, 0, s->const_val);
 
     } else {
-      emit(3, s->l, s->m);
+      emit(3, lex_level - s->level, s->m);
     }
 
     return;
@@ -448,59 +440,50 @@ void is_factor() {
 
   t = next_token(lparentsym, NULL);
   if (!t) {
-    err("expected identifier, number or left parentheses");
+    err("factor: expected identifier, number or left parentheses");
   }
 
   is_expression();
-  t = next_token(rparentsym, "expected right parentheses");
+  t = next_token(rparentsym, "expression: expected right parentheses");
 }
-
-int term_ops[] = {multsym, slashsym, modsym};
-int term_ops_m[] = {3, 4, 11};
 
 void is_term() {
   is_factor();
 
-  // Match either multiplication, division or modulus.
-  for (int i = 0; i < sizeof(term_ops) / sizeof(term_ops[0]); i++) {
-    token *t = next_token(term_ops[i], NULL);
-    if (t) {
-      emit(2, 0, term_ops_m[i]);
-      return;
-    }
+  // Match either multiplication or division.
+
+  token *t;
+  while ((t = next_token(multsym, NULL)) || (t = next_token(slashsym, NULL))) {
+    is_factor();
+
+    // Emit multiplication
+    if (t->kind == multsym)
+      emit(2, 0, 3);
+
+    // Emit division
+    if (t->kind == slashsym)
+      emit(2, 0, 4);
   }
 }
 
 void is_expression() {
-
   is_term();
 
   token *t;
   while ((t = next_token(plussym, NULL)) || (t = next_token(minussym, NULL))) {
     is_term();
 
-    if (t->tk == plussym)
+    if (t->kind == plussym)
       emit(2, 0, 1);
 
-    if (t->tk == minussym)
+    if (t->kind == minussym)
       emit(2, 0, 2);
   }
 }
 
 int rel_ops[] = {eqsym, neqsym, lessym, leqsym, gtrsym, geqsym};
 int rel_ops_m[] = {5, 6, 7, 8, 9, 10};
-
-void is_rel_op() {
-  token *t;
-  // Try all relational operators, return early if found
-  for (int i = 0; i < sizeof(rel_ops) / sizeof(rel_ops[0]); i++) {
-    if ((t = next_token(rel_ops[i], NULL))) {
-      emit(2, 0, rel_ops_m[i]);
-      return;
-    }
-  }
-  err("expected relational operator");
-}
+const int rel_ops_size = sizeof(rel_ops) / sizeof(rel_ops[0]);
 
 int is_condition_odd() {
   token *t = next_token(oddsym, NULL);
@@ -516,8 +499,23 @@ int is_condition_odd() {
 
 int is_condition_exp_rel() {
   is_expression();
-  is_rel_op();
+
+  int rel_op_idx = -1;
+
+  // Try all relational operators, return early if found
+  for (int i = 0; i < rel_ops_size; i++)
+    if (next_token(rel_ops[i], NULL)) {
+      rel_op_idx = i;
+      break;
+    }
+
+  if (rel_op_idx == -1)
+    err("relational operator: expected one relational operator");
+
   is_expression();
+
+  emit(2, 0, rel_ops_m[rel_op_idx]);
+
   return 1;
 }
 
@@ -525,7 +523,7 @@ void is_condition() {
   if (is_condition_odd() || is_condition_exp_rel())
     return;
 
-  err("expected odd condition or expression condition");
+  err("condition: expected expression or odd statement");
 }
 
 int is_statement();
@@ -545,15 +543,16 @@ int is_statement_read() {
   if (!t)
     return 0;
 
-  t = next_token(identsym, "expected identifier after \"read\"");
-
-  token *existing_symbol = find_symbol(t->lexeme.arr);
-
-  if (!existing_symbol || existing_symbol->sk != variable)
-    err("expected variable to store user input");
-
   emit(9, 0, 2);
-  emit(4, existing_symbol->l, existing_symbol->m);
+
+  t = next_token(identsym, "read statement: expected identifier");
+
+  symbol *s = find_symbol(t->lexeme.arr);
+
+  if (!s || s->kind != variable)
+    err("read statement: expected variable identifier");
+
+  emit(4, lex_level - s->level, s->m);
 
   return 1;
 }
@@ -563,19 +562,20 @@ int is_statement_while() {
   if (!t)
     return 0;
 
-  int condition_line = code_line + 1;
-
+  int condition_line = code_idx + 1;
   is_condition();
-
-  t = next_token(dosym, "expected \"do\" after condition");
 
   int jpc_idx = emit(8, 0, 0);
 
+  t = next_token(dosym, "end of condition: expected \"do\"");
+
   is_statement();
 
-  emit(8, 0, condition_line);
+  // After statement, emit JMP that goes back to condition line
+  emit(7, 0, condition_line);
 
-  fix_jpc(jpc_idx);
+  // Fix JPC condition to go to whatever's after the JMP line
+  fix_jpc_jmp(jpc_idx);
 
   return 1;
 }
@@ -589,13 +589,13 @@ int is_statement_if() {
 
   int jpc_idx = emit(8, 0, 0);
 
-  t = next_token(thensym, "expected \"then\" after condition");
+  t = next_token(thensym, "end of condition: expected \"then\"");
 
   is_statement();
 
-  fix_jpc(jpc_idx);
+  fix_jpc_jmp(jpc_idx);
 
-  t = next_token(fisym, "expected \"fi\" after statement");
+  t = next_token(fisym, "end of \"if\" block: expected \"fi\"");
 
   return 1;
 }
@@ -606,10 +606,11 @@ int is_statement_begin() {
     return 0;
 
   do {
-    is_statement();
-  } while ((t = next_token(semicolonsym, NULL)) && t->tk == semicolonsym);
 
-  t = next_token(endsym, "expected \"end\" after statement");
+    is_statement();
+  } while ((t = next_token(semicolonsym, NULL)) && t->kind == semicolonsym);
+
+  t = next_token(endsym, "end of statements: expected \"end\"");
 
   return 1;
 }
@@ -619,23 +620,16 @@ int is_statement_call() {
   if (!t)
     return 0;
 
-  t = next_token(identsym, "expected identifier after \"call\"");
+  t = next_token(identsym, "procedure call: expected identifier");
 
-  for (int i = const_var_procedure.stored - 1; i >= 0; i--) {
-    token *s = &const_var_procedure.arr[i];
-    if (strcmp(t->lexeme.arr, s->lexeme.arr) == 0) {
+  symbol *s = find_symbol(t->lexeme.arr);
 
-      if (s->sk != procedure)
-        err("attempt to call symbol that is not a procedure");
+  if (!s || s->kind != procedure)
+    err("procedure call: could not find procedure with name");
 
-      emit(5, s->l, s->m);
-      return 1;
-    }
-  }
+  emit(5, lex_level - s->level, s->m * assembly_size);
 
-  err("attempt to call non-existent procedure");
-
-  return 0;
+  return 1;
 }
 
 int is_statement_becomes() {
@@ -643,19 +637,16 @@ int is_statement_becomes() {
   if (!t)
     return 0;
 
-  token *s = find_symbol(t->lexeme.arr);
+  symbol *s = find_symbol(t->lexeme.arr);
 
-  if (!s)
-    err("could not find symbol with name");
+  if (!s || s->kind != variable)
+    err("assignment: could not find any variable with name");
 
-  if (s->sk != variable)
-    err("attempt to assign to non-variable symbol");
-
-  t = next_token(becomessym, "expected \":=\" after identifier");
+  t = next_token(becomessym, "assignment: expected \":=\" after identifier");
 
   is_expression();
 
-  emit(4, t->l, t->m);
+  emit(4, lex_level - s->level, s->m);
 
   return 1;
 }
@@ -678,31 +669,33 @@ int is_statement() {
 }
 
 int is_var() {
-  int var_count;
+
+  int variable_count = 0;
 
   token *t = next_token(varsym, NULL);
   if (!t)
-    return var_count;
-
-  int m = ar_min;
+    return variable_count;
 
   do {
 
-    var_count++;
-    m++;
+    int offset = ar_min + variable_count;
+    variable_count++;
 
     t = next_token(identsym, "expected identifier");
 
-    t->sk = variable;
-    t->l = lex_level;
-    t->m = m;
-    push_token(&const_var_procedure, *t);
+    symbol s;
+    s.kind = variable;
+    s.name = t->lexeme;
+    s.level = lex_level;
+    s.m = offset;
 
-  } while ((t = next_token(commasym, NULL)) && t->tk == commasym);
+    push_symbol(&symbols, s);
+
+  } while ((t = next_token(commasym, NULL)) && t->kind == commasym);
 
   t = next_token(semicolonsym, "expected \";\" after identifier");
 
-  return var_count;
+  return variable_count;
 }
 
 void is_const() {
@@ -714,15 +707,19 @@ void is_const() {
 
     t = next_token(identsym, "expected identifier");
     token *identifier = t;
+    symbol s;
+    s.kind = constant;
+    s.name = t->lexeme;
+    s.level = lex_level;
 
     t = next_token(eqsym, "expected \"=\" after identifier");
     t = next_token(numbersym, "expected number after \"=\"");
 
-    identifier->sk = constant;
-    identifier->val = atoi(t->lexeme.arr);
-    push_token(&const_var_procedure, *identifier);
+    s.const_val = atoi(t->lexeme.arr);
 
-  } while ((t = next_token(commasym, NULL)) && t->tk == commasym);
+    push_symbol(&symbols, s);
+
+  } while ((t = next_token(commasym, NULL)) && t->kind == commasym);
 
   t = next_token(semicolonsym, "expected \";\" after identifier");
 }
@@ -732,39 +729,55 @@ void is_block();
 void is_procedure() {
 
   token *t;
-  while ((t = next_token(proceduresym, NULL)) && t->tk == proceduresym) {
+  while ((t = next_token(proceduresym, NULL)) && t->kind == proceduresym) {
 
     t = next_token(identsym, "expected identifier after procedure");
-    t->sk = procedure;
-    t->l = lex_level;
-    t->m = lex_level;
-    push_token(&const_var_procedure, *t);
+
+    symbol s;
+    s.name = t->lexeme;
+    s.kind = procedure;
+    s.level = lex_level;
+
+    // Emit JMP
+    int jmp_idx = emit(7, 0, 0);
+    s.m = code_idx + 1;
+    push_symbol(&symbols, s);
 
     t = next_token(semicolonsym, "expected \";\" after identifier");
 
-    lex_level++;
+    // Descend into and exit from new block
     is_block();
 
-    // Remove any constants/variables/procedures generated by the block
-    for (int i = const_var_procedure.stored - 1; i >= 0; i--) {
-      token *top = peek_token(&asm_list);
-      int is_const_var_proc =
-          top->sk == constant || top->sk == variable || top->sk == procedure;
-      if (top && is_const_var_proc && top->l == lex_level)
-        pop_token(&const_var_procedure);
-    }
+    // Emit RTN
+    emit(2, 0, 0);
 
-    lex_level--;
+    // Fix jump to target whatever statement's after RTN.
+    fix_jpc_jmp(jmp_idx);
 
     t = next_token(semicolonsym, "expected \";\" after block");
   }
+  return;
 }
 
 void is_block() {
-  is_const();
-  is_var();
-  is_procedure();
+
+  lex_level++;
+  int symbols_start = symbols.stored;
+
+  is_const();                          // try to generate constants
+  int variable_count = is_var();       // try to generate variables
+  is_procedure();                      // try to generate procedure
+  emit(6, 0, ar_min + variable_count); // emit INC
+
+  // try to generate statements
   is_statement();
+
+  // Remove any symbols generated by this block
+  for (int i = symbols.stored - 1; symbols_start <= i && i < symbols.stored;
+       i--)
+    pop_symbol(&symbols);
+
+  lex_level--;
 }
 
 void is_program() {
@@ -776,17 +789,17 @@ void is_program() {
 // Generate lexical error message
 char *lex_err(token t) {
   // If identifier and too long
-  if (t.tk == identsym && t.lexeme.stored > (iden_size + 1)) {
+  if (t.kind == identsym && t.lexeme.stored > (iden_size + 1)) {
     return "identifier too long";
   }
 
   // If number and too long
-  if (t.tk == numbersym && t.lexeme.stored > (number_size + 1)) {
+  if (t.kind == numbersym && t.lexeme.stored > (number_size + 1)) {
     return "number too long";
   }
 
   // If otherwise invalid chars
-  if (t.tk == 0) {
+  if (t.kind == 0) {
     return "not part of any lexeme";
   }
 
@@ -818,7 +831,34 @@ void lex_output(int also_print) {
 
     // Print lex analysis for current token
     if (also_print)
-      printf("%-11s | %-5d | %s%s\n", t.lexeme.arr, t.tk, err_prefix, err_msg);
+      printf("%-11s | %-5d | %s%s\n", t.lexeme.arr, t.kind, err_prefix,
+             err_msg);
+  }
+}
+
+void print_assembly(int flag, FILE *fptr) {
+
+  if (!flag)
+    return;
+
+  if (flag == 1) {
+    printf("Line | OP  | L | M\n");
+    printf("-----+-----+---+---\n");
+    for (int i = 0; i < asm_list.stored; i++) {
+      assembly a = asm_list.arr[i];
+      printf("%-4d | %-2s | %d | %d\n", i, a.pretty, a.l, a.m);
+    }
+    return;
+  }
+
+  if (flag == 2) {
+    for (int i = 0; i < asm_list.stored; i++) {
+      assembly a = asm_list.arr[i];
+      fprintf(fptr, "%d %d %d\n", a.op, a.l, a.m);
+    }
+
+    fclose(fptr);
+    return;
   }
 }
 
@@ -941,8 +981,8 @@ int main(int argc, char *argv[]) {
 
   is_program();
 
-  for (int i = 0; i < asm_list.stored; i++) {
-    token t = asm_list.arr[i];
-    printf("%s %2d %2d\n", t.lexeme.arr, t.l, t.m);
-  }
+  print_assembly(1, NULL);
+
+  FILE *fptr = fopen("elf.txt", "w");
+  print_assembly(2, fptr);
 }
