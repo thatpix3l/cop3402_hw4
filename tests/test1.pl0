@@ -1,0 +1,7 @@
+procedure weedNumber;
+    begin
+        write 420;
+    end;
+begin
+    call willFail;
+end.
