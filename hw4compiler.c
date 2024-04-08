@@ -399,14 +399,16 @@ token *next_token(token_kind token_sym, char *msg) {
 
 void is_expression();
 
-symbol *find_symbol(char *str) {
+symbol *find_symbol(char *str, int is_procedure) {
 
   for (int i = symbols.stored - 1; i >= 0; i--) {
 
     symbol *s = &symbols.arr[i];
 
     if (strcmp(str, s->name.arr) == 0)
-      return s;
+      if (is_procedure && s->kind == procedure ||
+          !is_procedure && s->kind != procedure)
+        return s;
   }
 
   return NULL;
@@ -417,9 +419,9 @@ void is_factor() {
   t = next_token(identsym, NULL);
   if (t) {
 
-    symbol *s = find_symbol(t->lexeme.arr);
+    symbol *s = find_symbol(t->lexeme.arr, 0);
 
-    if (!s || s->kind == procedure) {
+    if (!s) {
       err("factor: expected constant or variable");
 
     } else if (s->kind == constant) {
@@ -526,7 +528,7 @@ void is_condition() {
   err("condition: expected expression or odd statement");
 }
 
-int is_statement();
+void is_statement();
 
 int is_statement_write() {
   token *t = next_token(writesym, NULL);
@@ -547,10 +549,13 @@ int is_statement_read() {
 
   t = next_token(identsym, "read statement: expected identifier");
 
-  symbol *s = find_symbol(t->lexeme.arr);
+  symbol *s = find_symbol(t->lexeme.arr, 0);
 
-  if (!s || s->kind != variable)
-    err("read statement: expected variable identifier");
+  if (!s)
+    err("read statement: symbol with identifier");
+
+  if (s->kind != variable)
+    err("read statement: symbol is not a variable");
 
   emit(4, lex_level - s->level, s->m);
 
@@ -622,9 +627,9 @@ int is_statement_call() {
 
   t = next_token(identsym, "procedure call: expected identifier");
 
-  symbol *s = find_symbol(t->lexeme.arr);
+  symbol *s = find_symbol(t->lexeme.arr, 1);
 
-  if (!s || s->kind != procedure)
+  if (!s)
     err("procedure call: could not find procedure with name");
 
   emit(5, lex_level - s->level, s->m * assembly_size);
@@ -637,10 +642,13 @@ int is_statement_becomes() {
   if (!t)
     return 0;
 
-  symbol *s = find_symbol(t->lexeme.arr);
+  symbol *s = find_symbol(t->lexeme.arr, 0);
 
-  if (!s || s->kind != variable)
-    err("assignment: could not find any variable with name");
+  if (!s)
+    err("assignment: could not find symbol with name");
+
+  if (s->kind != variable)
+    err("assignment: symbol is not a variable");
 
   t = next_token(becomessym, "assignment: expected \":=\" after identifier");
 
@@ -657,15 +665,15 @@ int (*is_statement_arr[])(void) = {is_statement_becomes, is_statement_call,
                                    is_statement_while,   is_statement_read,
                                    is_statement_write};
 
-int is_statement() {
+void is_statement() {
   // Run each statement checker, break early if valid
   for (int i = 0; i < sizeof(is_statement_arr) / sizeof(is_statement_arr[0]);
        i++) {
     int (*fn)() = is_statement_arr[i];
     if (fn())
-      return i;
+      return;
   }
-  return -1;
+  return;
 }
 
 int is_var() {
